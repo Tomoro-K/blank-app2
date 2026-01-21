@@ -64,17 +64,82 @@ if 'df' not in st.session_state:
     st.session_state.df = None
 if 'original_df' not in st.session_state:
     st.session_state.original_df = None
+if 'data_source' not in st.session_state:
+    st.session_state.data_source = None
+
+# サンプルデータ生成関数
+def generate_sample_data(data_type, n_rows=100, include_missing=True):
+    """サンプルデータを生成する"""
+    np.random.seed(42)
+    
+    if data_type == "売上データ":
+        dates = pd.date_range(start='2024-01-01', periods=n_rows, freq='D')
+        products = np.random.choice(['商品A', '商品B', '商品C', '商品D', '商品E'], n_rows)
+        categories = np.random.choice(['食品', '日用品', '電化製品', '衣類'], n_rows)
+        quantities = np.random.randint(1, 50, n_rows)
+        unit_prices = np.random.choice([100, 500, 1000, 2000, 5000], n_rows)
+        df = pd.DataFrame({
+            '日付': dates,
+            '商品名': products,
+            'カテゴリ': categories,
+            '数量': quantities,
+            '単価': unit_prices,
+            '売上額': quantities * unit_prices
+        })
+    
+    elif data_type == "顧客データ":
+        df = pd.DataFrame({
+            '顧客ID': [f'C{i:04d}' for i in range(1, n_rows + 1)],
+            '年齢': np.random.randint(18, 70, n_rows),
+            '性別': np.random.choice(['男性', '女性'], n_rows),
+            '地域': np.random.choice(['北海道', '東北', '関東', '中部', '近畿', '中国', '四国', '九州'], n_rows),
+            '購買金額': np.random.randint(1000, 100000, n_rows),
+            '購買回数': np.random.randint(1, 30, n_rows)
+        })
+    
+    elif data_type == "センサーデータ":
+        timestamps = pd.date_range(start='2024-01-01', periods=n_rows, freq='H')
+        df = pd.DataFrame({
+            '時刻': timestamps,
+            '温度': np.random.normal(25, 5, n_rows).round(1),
+            '湿度': np.random.normal(60, 15, n_rows).round(1).clip(0, 100),
+            '気圧': np.random.normal(1013, 10, n_rows).round(1),
+            'CO2濃度': np.random.normal(400, 50, n_rows).round(0)
+        })
+    
+    else:
+        df = pd.DataFrame()
+    
+    # 欠損値を追加
+    if include_missing and len(df) > 0:
+        for col in df.select_dtypes(include=[np.number]).columns:
+            mask = np.random.random(len(df)) < 0.05
+            df.loc[mask, col] = np.nan
+    
+    return df
 
 # サイドバー：ファイルアップロード
 with st.sidebar:
     st.header("📁 データアップロード")
-    uploaded_file = st.file_uploader(
+    
+    # データクリアボタン（データがある場合のみ表示）
+    if st.session_state.df is not None:
+        if st.button("🗑️ データをクリア", use_container_width=True, type="secondary"):
+            st.session_state.df = None
+            st.session_state.original_df = None
+            st.session_state.data_source = None
+            st.rerun()
+        st.divider()
+    
+    # ファイルアップロード（複数対応）
+    uploaded_files = st.file_uploader(
         "CSVファイルを選択してください",
         type=['csv'],
-        help="UTF-8またはShift-JISエンコーディングのCSVファイルに対応しています"
+        accept_multiple_files=True,
+        help="複数ファイルを選択して結合することもできます"
     )
     
-    if uploaded_file is not None:
+    if uploaded_files:
         # エンコーディングの選択
         encoding = st.selectbox(
             "エンコーディング",
@@ -82,13 +147,70 @@ with st.sidebar:
             help="ファイルが正しく読み込めない場合は別のエンコーディングを試してください"
         )
         
-        try:
-            df = pd.read_csv(uploaded_file, encoding=encoding)
-            st.session_state.df = df.copy()
-            st.session_state.original_df = df.copy()
-            st.success(f"✅ データを読み込みました！\n\n行数: {len(df):,} 行\n列数: {len(df.columns)} 列")
-        except Exception as e:
-            st.error(f"❌ ファイルの読み込みに失敗しました: {str(e)}")
+        # 複数ファイルの結合方法
+        if len(uploaded_files) > 1:
+            concat_method = st.radio(
+                "結合方法",
+                ['縦方向（行を追加）', '横方向（列を追加）'],
+                help="縦方向：同じ列構造のデータを結合\n横方向：異なる列を持つデータを結合"
+            )
+        else:
+            concat_method = '縦方向（行を追加）'
+        
+        if st.button("📥 データを読み込む", type="primary", use_container_width=True):
+            try:
+                dfs = []
+                for file in uploaded_files:
+                    df_temp = pd.read_csv(file, encoding=encoding)
+                    dfs.append(df_temp)
+                    st.caption(f"✓ {file.name} ({len(df_temp):,}行)")
+                
+                if len(dfs) > 1:
+                    if '縦方向' in concat_method:
+                        df = pd.concat(dfs, ignore_index=True)
+                    else:
+                        df = pd.concat(dfs, axis=1)
+                    st.success(f"✅ {len(uploaded_files)}ファイルを結合しました！")
+                else:
+                    df = dfs[0]
+                    st.success(f"✅ データを読み込みました！")
+                
+                st.session_state.df = df.copy()
+                st.session_state.original_df = df.copy()
+                st.session_state.data_source = 'upload'
+                st.info(f"行数: {len(df):,} 行 | 列数: {len(df.columns)} 列")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ ファイルの読み込みに失敗しました: {str(e)}")
+    
+    st.divider()
+    
+    # サンプルデータ生成セクション
+    st.header("🧪 サンプルデータ生成")
+    st.caption("テスト用の架空データを生成できます")
+    
+    sample_type = st.selectbox(
+        "データの種類",
+        ['売上データ', '顧客データ', 'センサーデータ']
+    )
+    
+    sample_rows = st.slider(
+        "行数",
+        min_value=50,
+        max_value=1000,
+        value=200,
+        step=50
+    )
+    
+    include_missing = st.checkbox("欠損値を含める（EDA練習用）", value=True)
+    
+    if st.button("🎲 サンプルを生成", use_container_width=True):
+        df = generate_sample_data(sample_type, sample_rows, include_missing)
+        st.session_state.df = df.copy()
+        st.session_state.original_df = df.copy()
+        st.session_state.data_source = 'sample'
+        st.success(f"✅ {sample_type}（{len(df):,}行）を生成しました！")
+        st.rerun()
     
     st.divider()
     
